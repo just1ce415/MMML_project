@@ -5,6 +5,8 @@ __pycache__
 
 __pypackages__/
 
+.vscode/
+
 .env
 .venv
 env/
@@ -14,3 +16,5 @@ env.bak/
 venv.bak/
 
 .data/
+data/
+papers/
