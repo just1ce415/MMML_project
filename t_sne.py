@@ -163,6 +163,15 @@ def kl_divergence_grad(P, Q, Y, D_inv):
     return grad
 
 
+def l2_penalty_grad(Y, beta):
+    """
+    Arguments:
+        Y: matrix NxK with embedding samples
+        beta: magnitude of the penalty term
+    """
+    return 2 * beta * Y
+
+
 #################################################
 # t-SNE
 #################################################
@@ -175,6 +184,8 @@ class TSNE:
         perplexity,
         learning_rate,
         momentum,
+        compression_period=20,
+        compression_term=2,
         verbose=False,
         color=None,
         seed=0,
@@ -183,6 +194,8 @@ class TSNE:
         self.perplexity = perplexity
         self.learning_rate = learning_rate
         self.momentum = momentum
+        self.compression_period = compression_period
+        self.compression_term = compression_term
 
         self.verbose = verbose
         self.color = color
@@ -216,13 +229,15 @@ class TSNE:
             Q, D_inv = q_joint_probabilities(Y)
 
             grad = kl_divergence_grad(P, Q, Y, D_inv)
+            if t < self.compression_period:
+                grad += l2_penalty_grad(Y, self.compression_term)
 
             Y = Y_1 - self._learning_rate(t) * grad + self._momentum(t) * (Y_1 - Y_2)
 
             Y_2 = Y_1
             Y_1 = Y
 
-            if self.verbose and t % 100 == 0:
+            if self.verbose and (t + 1) % 100 == 0:
                 print(f"Max difference between Y_1 and Y_2: {np.max(abs(Y_1 - Y_2))}")
                 plt.scatter(Y[:, 0], Y[:, 1], c=self.color)
                 plt.show()
