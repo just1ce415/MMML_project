@@ -149,14 +149,25 @@ def pairwise_sq_distances(X):
     return D
 
 
-def kl_divergence_grad(P, Q, Y, D_inv):
+def kl_divergence(P, Q):
+    # for numerical stability
+    # to divide
+    np.fill_diagonal(Q, 1e-8)
+
+    terms = P * np.log(P / Q)
+    np.fill_diagonal(terms, 0)
+
+    return terms.sum()
+
+
+def kl_divergence_grad(P, Q, Y, D_recip):
     pq_expand = np.expand_dims(P - Q, 2)
 
     y_i = np.expand_dims(Y, 1)
     y_j = np.expand_dims(Y, 0)
     y_diff = y_i - y_j
 
-    d_expand = np.expand_dims(D_inv, 2)
+    d_expand = np.expand_dims(D_recip, 2)
 
     grad = 4 * (pq_expand * y_diff * d_expand).sum(axis=1)
 
@@ -204,6 +215,8 @@ class TSNE:
 
         self.sigmas = None
 
+        self.metrics = {"kl_divergence": 0, "spearman_corr": 0}
+
     def fit(self, X):
         rng = np.random.default_rng(seed=self.seed)
         N = X.shape[0]
@@ -241,6 +254,8 @@ class TSNE:
                 print(f"Max difference between Y_1 and Y_2: {np.max(abs(Y_1 - Y_2))}")
                 plt.scatter(Y[:, 0], Y[:, 1], c=self.color)
                 plt.show()
+
+        self.metrics["kl_divergence"] = kl_divergence(P, Q)
 
         return Y
 
