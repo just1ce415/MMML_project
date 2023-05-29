@@ -5,8 +5,22 @@ from sklearn.decomposition import PCA
 from scipy.special import logsumexp
 
 
-# TODO: divide by sigma
-def build_nn_graph(X, k, perplexity):
+#################################################
+# Random Walk
+#################################################
+
+
+def build_nn_graph(X, num_nn, perplexity):
+    """
+    Build nearest neighbors graph.
+
+    Parameters:
+        X (np.array): Array of samples
+        num_nn (int): Number of nearest neighbors
+        perplexity: Desired perplexity for all points
+    Returns:
+        graph (dict): Built graph
+    """
     graph = {}
     print("Building graph...")
     for i in tqdm(range(X.shape[0])):
@@ -19,7 +33,7 @@ def build_nn_graph(X, k, perplexity):
         # to remove current point from nn
         sq_distances[i] = np.inf
 
-        nn_idx = np.argpartition(sq_distances, k)[:k]
+        nn_idx = np.argpartition(sq_distances, num_nn)[:num_nn]
 
         neg_nn_distances = -sq_distances[nn_idx] / (2 * sigma**2)
         # for numerical stability
@@ -45,7 +59,7 @@ def find_terminal_node(graph, node, landmarks_set):
             return node
 
 
-def random_walk(graph, landmarks_idx, num_iters, labels):
+def random_walk(graph, landmarks_idx, num_iters, labels=None):
     """
     Performs random walk on the graph from one landmark point to another.
 
@@ -73,14 +87,14 @@ def random_walk(graph, landmarks_idx, num_iters, labels):
             j = node_array_map[finish]
             p_cond[i][j] += 1
 
-            # print(f"Started at {labels[start]}, finished at {labels[finish]}")
-            if labels[start] == labels[finish]:
-                correct_paths += 1
-            if start == finish:
-                short_circuits += 1
-
-    print(f"Fraction of correct paths: {correct_paths / (num_iters * K)}")
-    print(f"Fraction of short circuits: {short_circuits / (num_iters * K)}")
+            if labels is not None:
+                if labels[start] == labels[finish]:
+                    correct_paths += 1
+                if start == finish:
+                    short_circuits += 1
+    if labels is not None:
+        print(f"Fraction of correct paths: {correct_paths / (num_iters * K)}")
+        print(f"Fraction of short circuits: {short_circuits / (num_iters * K)}")
 
     np.fill_diagonal(p_cond, 0)
 
@@ -298,7 +312,7 @@ class TSNE:
         ee: enable early exaggeration
         ee_iterations: if ee=True, number of iteration for early exaggeration
         verbose: enable plotting every 100 iterations
-        color: if verbose=True, list ints of size N (number of samples) which represent encoded labels
+        labels: if verbose=True, list ints of size N (number of samples) which represent encoded labels
         seed: seed for random generator
     """
 
@@ -319,8 +333,7 @@ class TSNE:
         num_nn=20,
         random_walk_num_iters=1000,
         verbose=False,
-        color=None,
-        seed=0,
+        labels=None,
     ):
         self.num_iters = num_iters
         self.n_components = n_components
@@ -339,66 +352,70 @@ class TSNE:
         self.random_walk_num_iters = random_walk_num_iters
 
         self.verbose = verbose
-        self.color = color
-
-        self.seed = seed
+        self.labels = labels
 
         self.landmarks_idx = None
         self.graph = None
         self.sigmas = None
+        self.X = None
         self.P = None
         self.Y = None
 
         self.metrics = {"kl_divergence": [], "spearman_corr": []}
 
-    def fit(self, X):
-        rng = np.random.default_rng(seed=self.seed)
+    def fit(self, X, seed=0):
+        """
+        Find joint probabilities matrix for given X.
+        """
+        rng = np.random.default_rng(seed)
         N = X.shape[0]
 
         if self.ee:
             self.learning_rate = N / 12
 
         if self.random_walk:
-            if self.landmarks_idx is None:
-                self.landmarks_idx = rng.choice(
-                    np.arange(N), size=int(N * self.points_part), replace=False
-                )
-                self.landmarks_idx = np.sort(self.landmarks_idx)
+            self.landmarks_idx = rng.choice(
+                np.arange(N), size=int(N * self.points_part), replace=False
+            )
+            self.landmarks_idx = np.sort(self.landmarks_idx)
 
-            if self.graph is None:
-                self.graph = build_nn_graph(X, self.num_nn, self.perplexity)
+            self.graph = build_nn_graph(X, self.num_nn, self.perplexity)
 
             P = random_walk_joint_probabilities(
-                self.graph, self.landmarks_idx, self.random_walk_num_iters, self.color
+                self.graph, self.landmarks_idx, self.random_walk_num_iters, self.labels
             )
-
-            # with open("data/rw_p.npy", "wb") as f:
-            #     np.save(f, P)
 
             # further works with selected data points
             X = X[self.landmarks_idx]
-            self.color = self.color[self.landmarks_idx]
+            self.labels = self.labels[self.landmarks_idx]
             N = X.shape[0]
         else:
             neg_sq_distances = -pairwise_sq_distances(X)
 
-            if self.sigmas is None:
-                self.sigmas = find_exact_sigmas(neg_sq_distances, self.perplexity)
+            self.sigmas = find_exact_sigmas(neg_sq_distances, self.perplexity)
 
             P = p_joint_probabilities(neg_sq_distances, self.sigmas)
 
         self.P = P
+        self.X = X
 
-        # return
+    # seperate transform() function with custom seed allows
+    # a few runs for once calculated P
+    def transform(self, seed=0):
+        """
+        Find mapping for earlier calculated probabilities matrix.
+        """
+        N = self.X.shape[0]
+        rng = np.random.default_rng(seed)
 
         if self.Y is None:
             if self.initialization == "random":
                 Y = rng.normal(0, 1e-4, (N, self.n_components))
             elif self.initialization == "pca":
                 pca = PCA(n_components=self.n_components)
-                Y = pca.fit(X=X)
+                Y = pca.fit(X=self.X)
 
-        Y = self._gradient_descent(P, Y)
+        Y = self._gradient_descent(self.P, Y)
 
         return Y
 
@@ -424,7 +441,7 @@ class TSNE:
 
             if self.verbose and (t + 1) % 100 == 0:
                 print(f"Max difference between Y_1 and Y_2: {np.max(abs(Y_1 - Y_2))}")
-                plt.scatter(Y[:, 0], Y[:, 1], c=self.color)
+                plt.scatter(Y[:, 0], Y[:, 1], c=self.labels)
                 plt.show()
 
         self.metrics["kl_divergence"].append(kl_divergence(P, Q))
