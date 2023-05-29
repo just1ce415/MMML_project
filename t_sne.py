@@ -2,15 +2,111 @@ import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+from scipy.special import logsumexp
+
+
+# TODO: divide by sigma
+def build_nn_graph(X, k, perplexity):
+    graph = {}
+    print("Building graph...")
+    for i in tqdm(range(X.shape[0])):
+        sq_distances = np.square(np.linalg.norm(X[i] - X, axis=1))
+
+        # find specific sigma
+        eval_fn = lambda sigma: calc_perplexity(-sq_distances, sigma)
+        sigma = binary_search(eval_fn, perplexity)
+
+        # to remove current point from nn
+        sq_distances[i] = np.inf
+
+        nn_idx = np.argpartition(sq_distances, k)[:k]
+
+        neg_nn_distances = -sq_distances[nn_idx] / (2 * sigma**2)
+        # for numerical stability
+        # e**k / e**m = e**(k-d) / e**(m-d)
+        neg_nn_distances = neg_nn_distances - np.max(neg_nn_distances)
+        # denom = logsumexp(neg_nn_distances)
+        # log_nn_probs = neg_nn_distances - denom
+        nn_probs = np.exp(neg_nn_distances)
+        nn_probs = nn_probs / nn_probs.sum()
+        nn_probs = np.cumsum(nn_probs)
+
+        graph[i] = [nn_idx, nn_probs]
+    return graph
+
+
+def find_terminal_node(graph, node, landmarks_set):
+    while True:
+        r = np.random.rand()
+        nn_idx, nn_probs = graph[node]
+        k = np.searchsorted(nn_probs, r)
+        node = nn_idx[k]
+        if node in landmarks_set:
+            return node
+
+
+def random_walk(graph, landmarks_idx, num_iters, labels):
+    """
+    Performs random walk on the graph from one landmark point to another.
+
+    Parameters:
+        graph (dict): Mapping from point to 2 lists. First list is
+        indices of nearest heighbors. Second is probabilities to
+        transit to them.
+        landmarks_idx (np.array): Array with indices of landmark points.
+        num_iters: Number of random walks starting from each point.
+    """
+    K = landmarks_idx.shape[0]
+
+    landmarks_set = set(landmarks_idx)
+    node_array_map = {landmarks_idx[i]: i for i in range(K)}
+    p_cond = np.zeros((K, K))
+
+    correct_paths = 0
+    short_circuits = 0
+
+    print("Running RW...")
+    for t in tqdm(range(num_iters)):
+        for i in range(K):
+            start = landmarks_idx[i]
+            finish = find_terminal_node(graph, start, landmarks_set)
+            j = node_array_map[finish]
+            p_cond[i][j] += 1
+
+            # print(f"Started at {labels[start]}, finished at {labels[finish]}")
+            if labels[start] == labels[finish]:
+                correct_paths += 1
+            if start == finish:
+                short_circuits += 1
+
+    print(f"Fraction of correct paths: {correct_paths / (num_iters * K)}")
+    print(f"Fraction of short circuits: {short_circuits / (num_iters * K)}")
+
+    np.fill_diagonal(p_cond, 0)
+
+    # for numerical stability
+    # to take log later
+    p_cond = p_cond + 1e-8
+
+    return p_cond / p_cond.sum(axis=1).reshape(-1, 1)
+
 
 #################################################
 # Probabilities
 #################################################
 
 
+def random_walk_joint_probabilities(graph, landmarks_idx, num_iters, labels):
+    p_cond = random_walk(graph, landmarks_idx, num_iters, labels)
+
+    p = (p_cond + p_cond.T) / (2 * p_cond.shape[0])
+
+    return p
+
+
 def p_joint_probabilities(X, sigmas):
     """
-    Arguments:
+    Parameters:
         X: matrix NxN with negative pairwise distances
     Returns:
         P: matrix NxN with joint probabilities
@@ -22,7 +118,7 @@ def p_joint_probabilities(X, sigmas):
 
 def p_conditional_probabilities(X, sigmas):
     """
-    Arguments:
+    Parameters:
         X: matrix KxN with negative pairwise squared distances
         sigmas: vector K with sigmas for corresponding samples
     """
@@ -45,7 +141,7 @@ def p_conditional_probabilities(X, sigmas):
 
 def q_joint_probabilities(Y):
     """
-    Arguments:
+    Parameters:
         Y: matrix NxT with samples in reduced T-dimensional
         space
     Returns:
@@ -68,11 +164,11 @@ def q_joint_probabilities(Y):
 #################################################
 
 
-def binary_search_perplexity(X, perplexity):
+def find_exact_sigmas(X, perplexity):
     """
     Find sigmas using binary search technique.
 
-    Arguments:
+    Parameters:
         X: matrix NxN with negative squared pairwise distances
     """
     sigmas = []
@@ -90,7 +186,7 @@ def binary_search_perplexity(X, perplexity):
 
 def calc_perplexity(X_i, sigma):
     """
-    Arguments:
+    Parameters:
         X_i: row matrix 1xN with negative pairwise distances
         for point x_i to others
         sigma: corresponding value
@@ -101,7 +197,7 @@ def calc_perplexity(X_i, sigma):
 
 def calc_shannon_entropy(X_i, sigma):
     """
-    Arguments:
+    Parameters:
         X_i: row matrix 1xN with negative pairwise distances
         for point x_i to others
         sigma: corresponding value
@@ -140,7 +236,7 @@ def pairwise_sq_distances(X):
     Compute pairwise squared euclidean distances between samples
     of X.
 
-    Arguments:
+    Parameters:
         X: matrix NxD with initial samples
     Returns:
         D: matrix NxN
@@ -162,7 +258,7 @@ def kl_divergence(P, Q):
 
 
 def kl_divergence_grad(P, Q, Y, D_recip, eef=1):
-    pq_expand = np.expand_dims(eef*P - Q, 2)
+    pq_expand = np.expand_dims(eef * P - Q, 2)
 
     y_i = np.expand_dims(Y, 1)
     y_j = np.expand_dims(Y, 0)
@@ -176,7 +272,7 @@ def kl_divergence_grad(P, Q, Y, D_recip, eef=1):
 
 def l2_penalty_grad(Y, beta):
     """
-    Arguments:
+    Parameters:
         Y: matrix NxK with embedding samples
         beta: magnitude of the penalty term
     """
@@ -190,7 +286,7 @@ def l2_penalty_grad(Y, beta):
 
 class TSNE:
     """
-    Arguments:
+    Parameters:
         n_components: number of output dimensions
         num_iters: number of iterations of optimization
         perplexity: soft number of neighbors for each point to form a cluster
@@ -205,6 +301,7 @@ class TSNE:
         color: if verbose=True, list ints of size N (number of samples) which represent encoded labels
         seed: seed for random generator
     """
+
     def __init__(
         self,
         n_components=2,
@@ -214,9 +311,13 @@ class TSNE:
         momentum=0.001,
         compression_period=20,
         compression_term=2,
-        initialization='random',
+        initialization="random",
         ee=False,
         ee_iterations=250,
+        random_walk=False,
+        points_part=0.3,
+        num_nn=20,
+        random_walk_num_iters=1000,
         verbose=False,
         color=None,
         seed=0,
@@ -232,16 +333,23 @@ class TSNE:
         self.ee = ee
         self.ee_iterations = ee_iterations
 
+        self.random_walk = random_walk
+        self.points_part = points_part
+        self.num_nn = num_nn
+        self.random_walk_num_iters = random_walk_num_iters
+
         self.verbose = verbose
         self.color = color
 
         self.seed = seed
 
+        self.landmarks_idx = None
+        self.graph = None
         self.sigmas = None
+        self.P = None
         self.Y = None
 
         self.metrics = {"kl_divergence": [], "spearman_corr": []}
-
 
     def fit(self, X):
         rng = np.random.default_rng(seed=self.seed)
@@ -250,17 +358,43 @@ class TSNE:
         if self.ee:
             self.learning_rate = N / 12
 
-        neg_sq_distances = -pairwise_sq_distances(X)
+        if self.random_walk:
+            if self.landmarks_idx is None:
+                self.landmarks_idx = rng.choice(
+                    np.arange(N), size=int(N * self.points_part), replace=False
+                )
+                self.landmarks_idx = np.sort(self.landmarks_idx)
 
-        if self.sigmas is None:
-            self.sigmas = binary_search_perplexity(neg_sq_distances, self.perplexity)
+            if self.graph is None:
+                self.graph = build_nn_graph(X, self.num_nn, self.perplexity)
 
-        P = p_joint_probabilities(neg_sq_distances, self.sigmas)
+            P = random_walk_joint_probabilities(
+                self.graph, self.landmarks_idx, self.random_walk_num_iters, self.color
+            )
+
+            # with open("data/rw_p.npy", "wb") as f:
+            #     np.save(f, P)
+
+            # further works with selected data points
+            X = X[self.landmarks_idx]
+            self.color = self.color[self.landmarks_idx]
+            N = X.shape[0]
+        else:
+            neg_sq_distances = -pairwise_sq_distances(X)
+
+            if self.sigmas is None:
+                self.sigmas = find_exact_sigmas(neg_sq_distances, self.perplexity)
+
+            P = p_joint_probabilities(neg_sq_distances, self.sigmas)
+
+        self.P = P
+
+        # return
 
         if self.Y is None:
-            if self.initialization == 'random':
+            if self.initialization == "random":
                 Y = rng.normal(0, 1e-4, (N, self.n_components))
-            elif self.initialization == 'pca':
+            elif self.initialization == "pca":
                 pca = PCA(n_components=self.n_components)
                 Y = pca.fit(X=X)
 
@@ -272,6 +406,7 @@ class TSNE:
         Y_1 = Y
         Y_2 = Y
 
+        print("Running gradient descent...")
         for t in tqdm(range(self.num_iters)):
             Q, D_inv = q_joint_probabilities(Y)
 
