@@ -22,7 +22,7 @@ def build_nn_graph(X, num_nn, perplexity):
         graph (dict): Built graph
     """
     graph = {}
-    print("Building graph...")
+    print("Building a neighborhood graph...")
     for i in tqdm(range(X.shape[0])):
         sq_distances = np.square(np.linalg.norm(X[i] - X, axis=1))
 
@@ -300,7 +300,7 @@ def l2_penalty_grad(Y, beta):
 
 class TSNE:
     """
-    Arguments:
+    Parameters:
         n_components: number of output dimensions
         num_iters: number of iterations of optimization
         perplexity: soft number of neighbors for each point to form a cluster
@@ -311,11 +311,12 @@ class TSNE:
         initialization: type of initialization: 'random' or 'pca'
         ee: enable early exaggeration
         ee_iterations: if ee=True, number of iteration for early exaggeration
+        random_walk: enable random walk
+        data_ratio: if random_walk=True, float ratio of data that will be used for landmarks
+        num_nn: if random_walk=True, number of nearest neighbors in neighborhood graph
+        random_walk_num_iters: if random_walk=True, number of iterations of random walk
         verbose: enable plotting every 100 iterations
-        color: if verbose=True, list ints of size N (number of samples) which represent encoded labels
-        seed: seed for random generator
         labels: if verbose=True, list ints of size N (number of samples) which represent encoded labels
-        seed: seed for random generator
     """
 
     def __init__(
@@ -331,7 +332,7 @@ class TSNE:
         ee=False,
         ee_iterations=250,
         random_walk=False,
-        points_part=0.3,
+        data_ratio=0.1,
         num_nn=20,
         random_walk_num_iters=1000,
         verbose=False,
@@ -349,13 +350,14 @@ class TSNE:
         self.ee_iterations = ee_iterations
 
         self.random_walk = random_walk
-        self.points_part = points_part
+        self.data_ratio = data_ratio
         self.num_nn = num_nn
         self.random_walk_num_iters = random_walk_num_iters
 
         self.verbose = verbose
         self.labels = labels
 
+        # in case if want to continue optimization
         self.landmarks_idx = None
         self.graph = None
         self.sigmas = None
@@ -365,7 +367,7 @@ class TSNE:
 
         self.metrics = {"kl_divergence": [], "spearman_corr": []}
 
-    def fit(self, X, seed=0):
+    def get_highdimensional_similarities(self, X, seed=0):
         """
         Find joint probabilities matrix for given X.
         """
@@ -377,7 +379,7 @@ class TSNE:
 
         if self.random_walk:
             self.landmarks_idx = rng.choice(
-                np.arange(N), size=int(N * self.points_part), replace=False
+                np.arange(N), size=int(N * self.data_ratio), replace=False
             )
             self.landmarks_idx = np.sort(self.landmarks_idx)
 
@@ -403,7 +405,7 @@ class TSNE:
 
     # seperate transform() function with custom seed allows
     # a few runs for once calculated P
-    def transform(self, seed=0):
+    def fit(self, seed=0):
         """
         Find mapping for earlier calculated probabilities matrix.
         """
@@ -412,14 +414,14 @@ class TSNE:
 
         if self.Y is None:
             if self.initialization == "random":
-                Y = rng.normal(0, 1e-4, (N, self.n_components))
+                self.Y = rng.normal(0, 1e-4, (N, self.n_components))
             elif self.initialization == "pca":
                 pca = PCA(n_components=self.n_components)
-                Y = pca.fit(X=self.X)
+                self.Y = pca.fit(X=self.X)
 
-        Y = self._gradient_descent(self.P, Y)
+        self.Y = self._gradient_descent(self.P, self.Y)
 
-        return Y
+        return self.Y
 
     def _gradient_descent(self, P, Y):
         Y_1 = Y
@@ -446,7 +448,7 @@ class TSNE:
                 plt.scatter(Y[:, 0], Y[:, 1], c=self.labels)
                 plt.show()
 
-        self.metrics["kl_divergence"].append(kl_divergence(P, Q))
+            self.metrics["kl_divergence"].append(kl_divergence(P, Q))
 
         return Y
 
@@ -458,10 +460,10 @@ class TSNE:
 
     def plot_metrics(self):
         fig, axs = plt.subplots(1, 1, figsize=(6, 6))
-        axs[0][0] = plt.plot(self.metrics["kl_divergence"])
-        axs[0][0].set_title("KL Divergence")
-        axs[0][0].set_xlabel("Iteration")
-        axs[0][0].set_ylabel("Value")
+        axs.plot(self.metrics["kl_divergence"])
+        axs.set_title("KL Divergence")
+        axs.set_xlabel("Iteration")
+        axs.set_ylabel("Value")
         fig.show()
 
 
@@ -476,11 +478,15 @@ def run_TSNE():
     X_test = np.array([[1, 2, 3], [1, 1, 1], [3, 3, 3]], dtype="float64")
     Y_test = np.power(X_test, 1e-4)
 
-    Y = tsne.fit(X_test)
+    tsne.get_highdimensional_similarities(X_test)
+    Y = tsne.fit()
 
     plt.scatter(Y[:, 0], Y[:, 1])
     plt.show()
 
+    print(tsne.metrics["kl_divergence"])
+    tsne.plot_metrics()
+    plt.show()
 
 if __name__ == "__main__":
     run_TSNE()

@@ -1,8 +1,0 @@
-
-
-1. what is shannon entropy?
-+
-2. how to perform binary search in this case?
-+
-3. won't random walk version conflict with original?
-check later
