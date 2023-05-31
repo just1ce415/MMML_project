@@ -26,21 +26,15 @@ def build_nn_graph(X, num_nn, perplexity):
     for i in tqdm(range(X.shape[0])):
         sq_distances = np.square(np.linalg.norm(X[i] - X, axis=1))
 
-        # find specific sigma
-        eval_fn = lambda sigma: calc_perplexity(-sq_distances, sigma)
-        sigma = binary_search(eval_fn, perplexity)
-
         # to remove current point from nn
         sq_distances[i] = np.inf
 
         nn_idx = np.argpartition(sq_distances, num_nn)[:num_nn]
 
-        neg_nn_distances = -sq_distances[nn_idx] / (2 * sigma**2)
+        neg_nn_distances = -sq_distances[nn_idx]
         # for numerical stability
         # e**k / e**m = e**(k-d) / e**(m-d)
         neg_nn_distances = neg_nn_distances - np.max(neg_nn_distances)
-        # denom = logsumexp(neg_nn_distances)
-        # log_nn_probs = neg_nn_distances - denom
         nn_probs = np.exp(neg_nn_distances)
         nn_probs = nn_probs / nn_probs.sum()
         nn_probs = np.cumsum(nn_probs)
@@ -403,7 +397,7 @@ class TSNE:
         self.P = P
         self.X = X
 
-    # seperate transform() function with custom seed allows
+    # seperate fit() function with custom seed allows
     # a few runs for once calculated P
     def fit(self, seed=0):
         """
@@ -487,6 +481,7 @@ def run_TSNE():
     print(tsne.metrics["kl_divergence"])
     tsne.plot_metrics()
     plt.show()
+
 
 if __name__ == "__main__":
     run_TSNE()
