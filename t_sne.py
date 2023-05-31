@@ -416,8 +416,14 @@ class TSNE:
             if self.initialization == "random":
                 self.Y = rng.normal(0, 1e-4, (N, self.n_components))
             elif self.initialization == "pca":
-                pca = PCA(n_components=self.n_components)
-                self.Y = pca.fit(X=self.X)
+                pca = PCA(
+                n_components=self.n_components,
+                svd_solver="randomized",
+                random_state=seed,
+                )
+                pca.set_output(transform="default")
+                self.Y = pca.fit_transform(self.X).astype(np.float32, copy=False)
+                self.Y = self.Y / np.std(self.Y[:, 0]) * 1e-4
 
         self.Y = self._gradient_descent(self.P, self.Y)
 
