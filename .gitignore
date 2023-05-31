@@ -19,3 +19,5 @@ venv.bak/
 data/
 papers/
 images/
+
+tsne_demo draft.ipynb
